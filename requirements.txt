@@ -7,3 +7,4 @@ seaborn
 streamlit
 python-dotenv
 groq
+shap
