@@ -4,6 +4,7 @@ import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shap
 import os
 from dotenv import load_dotenv
 from groq import Groq
@@ -29,6 +30,10 @@ model_files = {
     "Random Forest": os.path.join(MODELS_DIR, 'random_forest.joblib'),
     "Gradient_boosting": os.path.join(MODELS_DIR, 'gradient_boosting.joblib')
 }
+
+# TreeExplainer is exact and fast for tree-based models; linear models need
+# their own explainer since they have no tree structure to walk.
+TREE_MODELS = {"Decision Tree", "Random Forest", "Gradient_boosting"}
 
 if uploaded_file:
     df_full = pd.read_csv(uploaded_file)
@@ -75,7 +80,9 @@ if uploaded_file:
 
             predictions = model.predict(df_pred)
 
-            tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Métriques", "Visualisations", "Analyse LLM"]) 
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                ["Résultats", "Métriques", "Visualisations", "Interprétabilité (SHAP)", "Analyse LLM"]
+            )
 
             with tab1:
                 st.subheader("Aperçu des prédictions")
@@ -114,8 +121,39 @@ if uploaded_file:
                         sns.histplot(errors, bins=20, kde=True, ax=ax2)
                         st.pyplot(fig2)
 
+            with tab4:
+                st.subheader("Quelles variables pèsent le plus sur la prédiction ?")
+                st.caption(
+                    "Valeurs SHAP calculées sur un échantillon des données envoyées : "
+                    "plus la barre est longue, plus la variable influence la prédiction du modèle."
+                )
+                try:
+                    sample = df_pred.sample(min(200, len(df_pred)), random_state=42)
+                    if model_name in TREE_MODELS:
+                        explainer = shap.TreeExplainer(model)
+                    else:
+                        explainer = shap.LinearExplainer(model, sample)
+                    shap_values = explainer.shap_values(sample)
+
+                    mean_abs_shap = np.abs(shap_values).mean(axis=0)
+                    importance_df = pd.DataFrame({
+                        "variable": sample.columns,
+                        "impact_moyen": mean_abs_shap
+                    }).sort_values("impact_moyen", ascending=False)
+
+                    top = importance_df.head(10).iloc[::-1]
+                    fig3, ax3 = plt.subplots(figsize=(5, 4))
+                    ax3.barh(top["variable"], top["impact_moyen"], color="#4c72b0")
+                    ax3.set_xlabel("Impact moyen sur la prédiction (|SHAP|)")
+                    st.pyplot(fig3)
+
+                    with st.expander("Voir le détail pour chaque variable"):
+                        st.dataframe(importance_df.reset_index(drop=True))
+                except Exception as e:
+                    st.warning(f"Impossible de calculer les valeurs SHAP pour ce modèle : {e}")
+
             if has_target:
-                with tab4:
+                with tab5:
                     st.subheader("Analyse automatique avec LLM")
                     llm_prompt = (
                         f"Voici les métriques du modèle BigMart :\n"
